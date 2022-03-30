@@ -1,0 +1,6 @@
+.vs
+.vscode
+_*/
+out/
+_build/
+_install/
