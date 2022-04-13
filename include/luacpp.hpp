@@ -139,9 +139,9 @@ namespace lua
 		light_userdata= LUA_TLIGHTUSERDATA,
 	};
 	
-	inline type typeof(state* l, int idx) { return type(lua_type(l, idx)); };
+	inline type type_of(state* l, int idx) { return type(lua_type(l, idx)); };
 	inline const char* type_name(state* l, type t) { return lua_typename(l, (int)t); };
-	inline const char* type_name_of(state* l, int idx) { return type_name(l, typeof(l, idx)); };
+	inline const char* type_name_of(state* l, int idx) { return type_name(l, type_of(l, idx)); };
 
 	inline state* newthread(state* l) { return lua_newthread(l); };
 	inline int resetthread(state* l) { return lua_resetthread(l); };
