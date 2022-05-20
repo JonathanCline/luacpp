@@ -1,21 +1,223 @@
 #pragma once
 
+/** @file */
+
 #include <lua.hpp>
 
-
-#include <memory>
+#include <bit>
+#include <array>
 #include <string>
+#include <memory>
+#include <vector>
+#include <iterator>
 #include <string_view>
 
-
-#if __has_include(<concepts>)
+#include <cstdint>
+#include <cstddef>
+#include <cassert>
 #include <concepts>
-#define LUA_CPP_CONCEPTS
-#endif
 
-#include <bit>
-#include <vector>
-#include <memory>
+/*
+	Type aliases and enums
+*/
+
+namespace lua
+{
+	/**
+	 * @brief Alias of the lua_State type.
+	*/
+	using state = lua_State;
+
+	/**
+	 * @brief Shorthand for a lua state pointer.
+	*/
+	using state_ptr = state*;
+
+	/**
+	 * @brief Lua types.
+	*/
+	enum class type
+	{
+		nil = LUA_TNIL,
+		none = LUA_TNONE,
+		function = LUA_TFUNCTION,
+		thread = LUA_TTHREAD,
+		string = LUA_TSTRING,
+		number = LUA_TNUMBER,
+		boolean = LUA_TBOOLEAN,
+		userdata = LUA_TUSERDATA,
+		table = LUA_TTABLE,
+		lightuserdata = LUA_TLIGHTUSERDATA,
+	};
+
+
+
+	/**
+	 * @brief Lua state/thread status codes.
+	*/
+	enum class status_code : int
+	{
+		/**
+		 * @brief No errors
+		*/
+		ok = LUA_OK,
+
+		/**
+		 * @brief The thread (coroutine) yields
+		*/
+		yield = LUA_YIELD,
+
+		/**
+		 * @brief Error while running the message handler
+		*/
+		err_err = LUA_ERRERR,
+
+		/**
+		 * @brief A file-related error (cannot open or read)
+		*/
+		err_file = LUA_ERRFILE,
+
+		/**
+		 * @brief Memory allocation error
+		*/
+		err_mem = LUA_ERRMEM,
+
+		/**
+		 * @brief Syntax error during precompilation
+		*/
+		err_syntax = LUA_ERRSYNTAX,
+
+		/**
+		 * @brief Runtime error
+		*/
+		err_run = LUA_ERRRUN,
+	};
+
+	/**
+	 * @brief Lua CFunction pointer type.
+	*/
+	using cfunction = lua_CFunction;
+	
+	/**
+	 * @brief Lua state deleter function object type.
+	*/
+	struct state_deleter
+	{
+		/**
+		 * @brief Calls lua_close, deleting a lua state.
+		 * @param _state Lua state pointer.
+		*/
+		void operator()(state* _state) const 
+		{ 
+			lua_close(_state);
+		};
+	};
+
+	/**
+	 * @brief Owning RAII handle to a lua state.
+	*/
+	using unique_state = std::unique_ptr<state, state_deleter>;
+
+	/**
+	 * @brief Lua allocator function type.
+	*/
+	using alloc_fn = lua_Alloc;
+
+	/**
+	 * @brief Lua chunk reader function type.
+	*/
+	using reader_fn = lua_Reader;
+
+	/**
+	 * @brief Lua chunk writer function type.
+	*/
+	using writer_fn = lua_Writer;
+
+
+	/**
+	 * @brief "nil" tag type, used to represent a nil value
+	*/
+	struct nil_t
+	{
+		constexpr explicit nil_t() noexcept = default;
+	};
+	
+	/**
+	 * @brief "nil" tag type value, used to represent a nil value
+	*/
+	constexpr inline auto nil = nil_t();
+
+
+
+	/**
+	 * @brief "fail" tag type, used to represent the fail value
+	*/
+	struct fail_t
+	{
+		constexpr explicit fail_t() noexcept = default;
+	};
+
+	/**
+	 * @brief "fail" tag type value, used to represent a fail value
+	*/
+	constexpr inline auto fail = fail_t();
+	
+
+
+
+	/**
+	 * @brief Customization point for defining how a type can interact with the lua state.
+	 * 
+	 * @tparam T Type whose stack traits are defined, specialize on this.
+	 * @tparam Enable SFINAE specialization point.
+	*/
+	template <typename T, typename Enable = void>
+	struct stack_traits;
+
+
+
+
+	/**
+	 * @brief Named lua chunk loading modes.
+	*/
+	enum class load_mode
+	{
+		/**
+		 * @brief Loads binary or text.
+		*/
+		bt = 0,
+
+		/**
+		 * @brief Loads previously compiled lua binary code.
+		*/
+		binary,
+		b = binary,
+
+		/**
+		 * @brief Loads lua source code text.
+		*/
+		text,
+		t = text,
+	};
+
+};
+
+
+
+/*
+	Type invariants
+*/
+
+namespace lua
+{
+	
+};
+
+
+
+/*
+	Basic lua functionality
+*/
 
 namespace lua
 {
@@ -58,30 +260,7 @@ namespace lua
 	};
 #endif
 
-	enum class status_code : int
-	{
-		ok = LUA_OK,
-		yield = LUA_YIELD,
-		err_err = LUA_ERRERR,
-		err_file = LUA_ERRFILE,
-		err_mem = LUA_ERRMEM,
-		err_syntax = LUA_ERRSYNTAX,
-		err_run = LUA_ERRRUN,
-	};
-
-
-
-	using state = lua_State;
-	using state_ptr = state*;
-
-	struct state_deleter
-	{
-		void operator()(state* _state) const { lua_close(_state); };
-	};
-	using unique_state = std::unique_ptr<state, state_deleter>;
-
-	using alloc_fn = lua_Alloc;
-
+	
 	inline state* newstate(alloc_fn f, void* ud)
 	{
 		return lua_newstate(f, ud);
@@ -109,10 +288,16 @@ namespace lua
 		lua_pushvalue(l, fromIdx);
 	};
 
-	struct nil_t { constexpr explicit nil_t() noexcept = default; };
-	constexpr inline auto nil = nil_t();
-
-	//inline void push(state* l) { lua_pushnil(l); };
+	// Copies n elements from the stack onto the top of the stack.
+	inline void copy_n(state_ptr _lua, int _firstFromIdx, int n)
+	{
+		const auto _firstIdx = lua_absindex(_lua, _firstFromIdx);
+		const auto _lastIdx = _firstIdx + n;
+		for (auto i = _firstIdx; i != _lastIdx; ++i)
+		{
+			lua::copy(_lua, i);
+		};
+	};
 
 	inline void push(state* l, nil_t v) { lua_pushnil(l); };
 	inline void push(state* l, lua_Integer v) { lua_pushinteger(l, v); };
@@ -130,9 +315,6 @@ namespace lua
 	{
 		lua_pushcclosure(l, _fn, _upValues);
 	};
-
-	template <typename T, typename Enable = void>
-	struct stack_traits;
 
 
 
@@ -185,11 +367,17 @@ namespace lua
 		struct is_pullable_args <T, ArgTList<Ts...>,
 			std::void_t<decltype(
 				stack_traits<std::remove_cvref_t<T>>::to(std::declval<state_ptr>(), std::declval<int>(),
-					std::declval<T&>(), std::declval<Ts>()...)
+					std::declval<std::remove_reference_t<T>&>(), std::declval<Ts>()...)
 			)>
 		> : std::true_type {};
 
-
+		template <typename T, template <typename... Ts> class ArgTList>
+		struct is_pullable_args <T, ArgTList<>,
+			std::void_t<decltype(
+				stack_traits<std::remove_cvref_t<T>>::to(std::declval<state_ptr>(), std::declval<int>(),
+					std::declval<std::remove_reference_t<T>&>())
+				)>
+		> : std::true_type {};
 
 		template <typename T, typename ArgTList, typename Enable = void>
 		struct pull_result;
@@ -199,7 +387,7 @@ namespace lua
 		{
 			using type = decltype(
 				stack_traits<std::remove_cvref_t<T>>::to(std::declval<state_ptr>(), std::declval<int>(),
-					std::declval<T>(), std::declval<Ts>()...)
+					std::declval<T&>(), std::declval<Ts>()...)
 				);
 		};
 	};
@@ -229,140 +417,26 @@ namespace lua
 	};
 
 	template <typename T, typename... ExtraArgs>
-	inline auto to(state_ptr _lua, int _index, T&& _value, ExtraArgs&&... _extra) ->
+	inline auto to(state_ptr _lua, int _index, T& _value, ExtraArgs&&... _extra) ->
 		pull_result_t<T, ExtraArgs...>
 	{
-		return stack_traits<std::remove_cvref_t<T>>::to(_lua, _index, std::forward<T>(_value), std::forward<ExtraArgs>(_extra)...);
+		return stack_traits<std::remove_cvref_t<T>>::to(_lua, _index, _value, std::forward<ExtraArgs>(_extra)...);
 	};
 
-
-
-
-
-	template <>
-	struct stack_traits<lua_Integer>
-	{
-		using type = lua_Integer;
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			_value = lua_tointeger(_lua, _index);
-		};
-		static void push(state_ptr _lua, const type& _value)
-		{
-			lua_pushinteger(_lua, _value);
-		};
-	};
 	template <typename T>
-	struct stack_traits<T, std::enable_if_t<std::is_integral<T>::value>>
+	inline auto to(state_ptr _lua, int _index, T& _value) -> pull_result_t<T>
 	{
-		using type = T;
-		static void push(state_ptr _lua, const type& _value)
-		{
-			lua_pushinteger(_lua, static_cast<lua_Integer>(_value));
-		};
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			lua_Integer _rawValue = lua_tointeger(_lua, _index);
-			_value = static_cast<type>(_rawValue);
-		};
+		return stack_traits<std::remove_cvref_t<T>>::to(_lua, _index, _value);
 	};
 
-	template <>
-	struct stack_traits<lua_Number>
+	template <typename T, typename... ExtraArgs>
+	requires cx_pullable<T, ExtraArgs...>
+	inline T pull(state_ptr _lua, int _index, ExtraArgs&&... _extra)
 	{
-		using type = lua_Number;
-		static void push(state_ptr _lua, const type& _value)
-		{
-			lua_pushnumber(_lua, _value);
-		};
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			_value = lua_tonumber(_lua, _index);
-		};
+		auto v = T{};
+		to(_lua, _index, v, std::forward<ExtraArgs>(_extra)...);
+		return v;
 	};
-	template <typename T>
-	struct stack_traits<T, std::enable_if_t<std::is_floating_point<T>::value>>
-	{
-		using type = T;
-		static void push(state_ptr _lua, const type& _value)
-		{
-			lua_pushnumber(_lua, static_cast<lua_Number>(_value));
-		};
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			lua_Number _rawValue = lua_tonumber(_lua, _index);
-			_value = static_cast<type>(_rawValue);
-		};
-	};
-
-	template <>
-	struct stack_traits<nil_t>
-	{
-		using type = nil_t;
-		static void push(state_ptr _lua, const type& _value)
-		{
-			lua_pushnil(_lua);
-		};
-	};
-	template <>
-	struct stack_traits<bool>
-	{
-		using type = bool;
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			_value = lua_toboolean(_lua, _index);
-		};
-		static void push(state_ptr _lua, const type& _value)
-		{
-			lua_pushboolean(_lua, _value);
-		};
-	};
-	template <>
-	struct stack_traits<const char*>
-	{
-		using type = const char*;
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			_value = lua_tostring(_lua, _index);
-		};
-		static auto push(state_ptr _lua, const type& _value)
-		{
-			return lua_pushstring(_lua, _value);
-		};
-	};
-	template <>
-	struct stack_traits<std::string_view>
-	{
-		using type = std::string_view;
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			size_t _len;
-			const char* _str = lua_tolstring(_lua, _index, &_len);
-			_value = type(_str, _len);
-		};
-		static auto push(state_ptr _lua, const type& _value)
-		{
-			return lua_pushlstring(_lua, _value.data(), _value.size());
-		};
-	};
-	template <>
-	struct stack_traits<lua_CFunction>
-	{
-		using type = lua_CFunction;
-		static void to(state_ptr _lua, int _index, type& _value)
-		{
-			_value = lua_tocfunction(_lua, _index);
-		};
-		static auto push(state_ptr _lua, const type& _value)
-		{
-			lua_pushcfunction(_lua, _value);
-		};
-		static auto push(state_ptr _lua, const type& _value, int _upvalues)
-		{
-			lua_pushcclosure(_lua, _value, _upvalues);
-		};
-	};
-
 
 
 
@@ -380,20 +454,6 @@ namespace lua
 	inline void remove(state* _lua, int _index) { lua_remove(_lua, _index); }
 	
 
-	enum class type  
-	{
-		nil = LUA_TNIL,
-		none = LUA_TNONE,
-		function = LUA_TFUNCTION,
-		thread = LUA_TTHREAD,
-		string = LUA_TSTRING,
-		number = LUA_TNUMBER,
-		boolean = LUA_TBOOLEAN,
-		userdata=LUA_TUSERDATA,
-		table= LUA_TTABLE,
-		light_userdata= LUA_TLIGHTUSERDATA,
-	};
-	
 	inline type type_of(state* l, int idx) { return type(lua_type(l, idx)); };
 	inline const char* type_name(state* l, type t) { return lua_typename(l, (int)t); };
 	inline const char* type_name_of(state* l, int idx) { return type_name(l, type_of(l, idx)); };
@@ -593,10 +653,19 @@ namespace lua
 	};
 
 
+	
 
-	inline void setglobal(state* _lua, const char* _name) { lua_setglobal(_lua, _name); };
 	inline type getglobal(state* _lua, const char* _name) { return type(lua_getglobal(_lua, _name)); };
+	inline void setglobal(state* _lua, const char* _name) { lua_setglobal(_lua, _name); };
 
+	inline type getglobal(state* _lua, const char* _name, size_t _nameLen)
+	{
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+		push(_lua, _name, _nameLen);
+		const auto _type = type(lua_rawget(_lua, -2));
+		lua_remove(_lua, -2);
+		return _type;
+	};
 	inline void setglobal(state* _lua, const char* _name, size_t _nameLen)
 	{
 		const auto _top = top(_lua);
@@ -608,15 +677,17 @@ namespace lua
 		settop(_lua, _top);
 		pop(_lua);
 	};
-	inline type getglobal(state* _lua, const char* _name, size_t _nameLen)
-	{
-		lua_rawgeti(_lua, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
-		push(_lua, _name, _nameLen);
-		const auto _type = type(lua_rawget(_lua, -2));
-		lua_remove(_lua, -2);
-		return _type;
-	};
 	
+	inline void setregistry(state_ptr _lua, int _regIndex)
+	{
+		lua_rawseti(_lua, LUA_REGISTRYINDEX, _regIndex);
+	};
+	inline type getregistry(state_ptr _lua, int _regIndex)
+	{
+		return type(lua_rawgeti(_lua, LUA_REGISTRYINDEX, _regIndex));
+	};
+
+
 	template <typename T, typename... ExTs>
 	requires cx_pushable<T, ExTs...>
 	inline auto pushglobal(state* _lua, std::string_view _name, T&& _value, ExTs&&... _exts)
@@ -679,21 +750,6 @@ namespace lua
 	};
 
 
-
-	/**
-	 * @brief Named lua string loading modes.
-	*/
-	enum class load_mode
-	{
-		bt = 0,
-
-		binary,
-		b = binary,
-		
-		text,
-		t = text,
-	};
-
 	namespace impl
 	{
 		/**
@@ -718,6 +774,13 @@ namespace lua
 	};
 
 
+
+	inline status_code load(state_ptr _lua, reader_fn _reader, void* _userdata, const char* _name, load_mode _mode)
+	{
+		const auto _modeStr = impl::load_mode_str(_mode);
+		const auto _status = ::lua_load(_lua, _reader, _userdata, _name, _modeStr);
+		return status_code(_status);
+	};
 
 	inline status_code load(state* _lua, const char* _str, size_t _strLen, const char* _name, load_mode _mode)
 	{
@@ -757,8 +820,14 @@ namespace lua
 
 
 
+	status_code loadfile(state* _lua, const char* _path, load_mode _mode);
+	inline status_code loadfile(state* _lua, const char* _path)
+	{
+		return loadfile(_lua, _path, load_mode::bt);
+	};
 
-	using write_fn = lua_Writer;
+
+
 
 	namespace impl
 	{
@@ -767,7 +836,7 @@ namespace lua
 	};
 
 
-	inline int dump(state* _lua, write_fn _writer, void* _userdata, bool _strip)
+	inline int dump(state* _lua, writer_fn _writer, void* _userdata, bool _strip)
 	{
 		return lua_dump(_lua, _writer, _userdata, _strip);
 	};
@@ -871,6 +940,478 @@ namespace lua
 		};
 	};
 
+};
+
+
+
+/*
+	Builtin stack traits type specializations
+*/
+
+#pragma region STACK_TRAIT_SPECIALIZATIONS
+namespace lua
+{
+
+
+
+	template <>
+	struct stack_traits<lua_Integer>
+	{
+		using type = lua_Integer;
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			_value = lua_tointeger(_lua, _index);
+		};
+		static void push(state_ptr _lua, const type& _value)
+		{
+			lua_pushinteger(_lua, _value);
+		};
+	};
+	template <typename T>
+	struct stack_traits<T, std::enable_if_t<std::is_integral<T>::value>>
+	{
+		using type = T;
+		static void push(state_ptr _lua, const type& _value)
+		{
+			lua_pushinteger(_lua, static_cast<lua_Integer>(_value));
+		};
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			lua_Integer _rawValue = lua_tointeger(_lua, _index);
+			_value = static_cast<type>(_rawValue);
+		};
+	};
+
+	template <>
+	struct stack_traits<lua_Number>
+	{
+		using type = lua_Number;
+		static void push(state_ptr _lua, const type& _value)
+		{
+			lua_pushnumber(_lua, _value);
+		};
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			_value = lua_tonumber(_lua, _index);
+		};
+	};
+	template <typename T>
+	struct stack_traits<T, std::enable_if_t<std::is_floating_point<T>::value>>
+	{
+		using type = T;
+		static void push(state_ptr _lua, const type& _value)
+		{
+			lua_pushnumber(_lua, static_cast<lua_Number>(_value));
+		};
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			lua_Number _rawValue = lua_tonumber(_lua, _index);
+			_value = static_cast<type>(_rawValue);
+		};
+	};
+
+	template <>
+	struct stack_traits<nil_t>
+	{
+		using type = nil_t;
+		static void push(state_ptr _lua, const type& _value)
+		{
+			lua_pushnil(_lua);
+		};
+	};
+	template <>
+	struct stack_traits<bool>
+	{
+		using type = bool;
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			_value = lua_toboolean(_lua, _index);
+		};
+		static void push(state_ptr _lua, const type& _value)
+		{
+			lua_pushboolean(_lua, _value);
+		};
+	};
+	template <>
+	struct stack_traits<const char*>
+	{
+		using type = const char*;
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			_value = lua_tostring(_lua, _index);
+		};
+		static auto push(state_ptr _lua, const type& _value)
+		{
+			return lua_pushstring(_lua, _value);
+		};
+	};
+
+	/**
+	 * @brief Stack traits type for C++ STL string view types.
+	 * @tparam Alloc String allocator type.
+	*/
+	template <>
+	struct stack_traits<std::string_view>
+	{
+		using type = std::string_view;
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			size_t _len;
+			const char* _str = lua_tolstring(_lua, _index, &_len);
+			_value = type(_str, _len);
+		};
+		static auto push(state_ptr _lua, const type& _value)
+		{
+			return lua_pushlstring(_lua, _value.data(), _value.size());
+		};
+	};
+
+	/**
+	 * @brief Stack traits type for C++ STL string types.
+	 * @tparam Alloc String allocator type.
+	*/
+	template <typename Alloc>
+	struct stack_traits<std::basic_string<char, std::char_traits<char>, Alloc>>
+	{
+	private:
+		using char_type = char;
+	public:
+		using type = std::basic_string<char_type, std::char_traits<char_type>, Alloc>;
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			const auto _str = lua_tostring(_lua, _index);
+			_value = _str;
+		};
+		static const char* push(state_ptr _lua, const type& _value)
+		{
+			return lua_pushstring(_lua, _value.c_str());
+		};
+	};
+
+	/**
+	 * @brief Stack traits type for lua C functions.
+	*/
+	template <>
+	struct stack_traits<lua_CFunction>
+	{
+		using type = lua_CFunction;
+		static void to(state_ptr _lua, int _index, type& _value)
+		{
+			_value = lua_tocfunction(_lua, _index);
+		};
+		static auto push(state_ptr _lua, const type& _value)
+		{
+			lua_pushcfunction(_lua, _value);
+		};
+		static auto push(state_ptr _lua, const type& _value, int _upvalues)
+		{
+			lua_pushcclosure(_lua, _value, _upvalues);
+		};
+	};
+
+	/**
+	 * @brief Stack traits type for the fail value.
+	*/
+	template <>
+	struct stack_traits<fail_t>
+	{
+		using type = fail_t;
+		static void push(state_ptr _lua, const type& _value)
+		{
+			luaL_pushfail(_lua);
+		};
+	};
+
+};
+#pragma endregion
+
+
+
+/*
+	Debugging related functionality
+*/
+
+namespace lua
+{
+	/**
+	 * @brief Holds debugging information about a lua state.
+	 *
+	 * Alias of lua_Debug.
+	*/
+	using debug_info = lua_Debug;
+
+	inline bool getstack(state_ptr _lua, int _level, debug_info& _outInfo)
+	{
+		// 0 == _level is invalid
+		// 1 == success
+		const auto _result = lua_getstack(_lua, _level, &_outInfo);
+		return _result == 1;
+	};
+
+	inline debug_info getstack(state_ptr _lua, int _level)
+	{
+		auto _info = debug_info{};
+		const auto _result = getstack(_lua, _level, _info);
+		assert(_result);
+		return _info;
+	};
+	inline debug_info getstack(state_ptr _lua)
+	{
+		return getstack(_lua, 1);
+	};
+
+
+
+	enum class info_field : uint16_t
+	{
+		function_on_stack = 0x00'01, // '>'
+
+		f = 0x00'02, // 'f' - function
+		l = 0x00'04, // 'l' - currentline
+		n = 0x00'08, // 'n' - name, namewhat
+		r = 0x00'10, // 'r' - ftransfer, ntransfer
+		S = 0x00'20, // 'S' - source, short_src, linedefined, lastlinedefined
+		t = 0x00'40, // 't' - istailcall
+		u = 0x00'80, // 'u' - nups, nparams, isvararg
+		L = 0x01'00, // 'L' - function_lines
+
+		// 'f'
+		function = f,
+
+		// 'l'
+		currentline = l,
+
+		// 'n'
+		name = n,
+		namewhat = n,
+
+		// 'r'
+		ftransfer = r,
+		ntransfer = r,
+
+		// 'S'
+		source = S,
+		short_src = S,
+		linedefined = S,
+		lastlinedefined = S,
+
+		// 't'
+		istailcall = t,
+
+		// 'u'
+		nups = u,
+		nparams = u,
+		isvararg = u,
+
+		// 'L'
+		function_lines = L,
+	};
+
+	constexpr info_field operator&(info_field lhs, info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		return info_field(static_cast<rep>(lhs) & static_cast<rep>(rhs));
+	};
+	constexpr info_field operator|(info_field lhs, info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		return info_field(static_cast<rep>(lhs) | static_cast<rep>(rhs));
+	};
+	constexpr info_field operator^(info_field lhs, info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		return info_field(static_cast<rep>(lhs) ^ static_cast<rep>(rhs));
+	};
+
+	constexpr info_field& operator&=(info_field& lhs, info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		lhs = lhs & rhs;
+		return lhs;
+	};
+	constexpr info_field& operator|=(info_field& lhs, info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		lhs = lhs | rhs;
+		return lhs;
+	};
+	constexpr info_field& operator^=(info_field& lhs, info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		lhs = lhs ^ rhs;
+		return lhs;
+	};
+
+	constexpr info_field operator~(info_field rhs)
+	{
+		using rep = std::underlying_type_t<info_field>;
+		return info_field(~static_cast<rep>(rhs));
+	};
+
+
+	namespace impl
+	{
+		constexpr char info_field_char(info_field _field)
+		{
+			switch (_field)
+			{
+			case info_field::function_on_stack:
+				return '>';
+			case info_field::f:
+				return 'f';
+			case info_field::L:
+				return 'L';
+			case info_field::l:
+				return 'l';
+			case info_field::n:
+				return 'n';
+			case info_field::r:
+				return 'r';
+			case info_field::S:
+				return 'S';
+			case info_field::t:
+				return 't';
+			case info_field::u:
+				return 'u';
+			default:
+				assert(false);
+				return '\0';
+			};
+		};
+
+		constexpr bool check_field(info_field _field, info_field _checkFor)
+		{
+			return (_field & _checkFor) == _checkFor;
+		};
+		
+		// Helper for creating the info field string
+		struct info_field_writer
+		{
+		public:
+			using value_type = char;
+		
+		private:
+			using buffer_type = std::array<value_type, 16>;
+			using iterator = typename buffer_type::iterator;
+
+		public:
+			constexpr const value_type* data() const
+			{
+				return this->buf_.data();
+			};
+			constexpr auto as_array() const
+			{
+				return this->buf_;
+			};
+
+			constexpr info_field_writer& append(value_type c)
+			{
+				auto& _it = this->it_;
+				const auto& _end = this->buf_.end();
+
+				assert(_it != _end);
+				*_it = c;
+				std::advance(_it, 1);
+				return *this;
+			};
+			constexpr info_field_writer& append_if(info_field _fields, info_field _hasField)
+			{
+				if (check_field(_fields, _hasField))
+				{
+					const auto c = info_field_char(_hasField);
+					if (c != '\0')
+					{
+						this->append(c);
+					}
+					else
+					{
+						assert(false);
+					};
+				};
+				return *this;
+			};
+
+			constexpr info_field_writer() :
+				buf_{ 0 },
+				it_(this->buf_.begin())
+			{};
+			
+		private:
+			buffer_type buf_;
+			iterator it_;
+		};
+
+		constexpr auto info_field_string(info_field _fields)
+		{
+			auto _buffer = info_field_writer();
+
+			_buffer.append_if(_fields, info_field::function_on_stack);
+			_buffer.append_if(_fields, info_field::f);
+			_buffer.append_if(_fields, info_field::l);
+			_buffer.append_if(_fields, info_field::n);
+			_buffer.append_if(_fields, info_field::r);
+			_buffer.append_if(_fields, info_field::S);
+			_buffer.append_if(_fields, info_field::t);
+			_buffer.append_if(_fields, info_field::u);
+			_buffer.append_if(_fields, info_field::L);
+
+			return _buffer.as_array();
+		};
+	};
+
+
+	inline bool getinfo(state_ptr _lua, const char* _what, debug_info& _inOutInfo)
+	{
+		const auto _result = lua_getinfo(_lua, _what, &_inOutInfo);
+		return _result == 1;
+	};
+	inline debug_info getinfo(state_ptr _lua, const char* _what)
+	{
+		auto _info = debug_info{};
+		const auto _result = getinfo(_lua, _what, _info);
+		assert(_result);
+		return _info;
+	};
+
+	inline bool getinfo(state_ptr _lua, info_field _fields, debug_info& _inOutInfo)
+	{
+		const auto _fieldStrBuffer = impl::info_field_string(_fields);
+		const auto _fieldStr = _fieldStrBuffer.data();
+		return getinfo(_lua, _fieldStr, _inOutInfo);
+	};
+	inline debug_info getinfo(state_ptr _lua, info_field _fields)
+	{
+		const auto _fieldStrBuffer = impl::info_field_string(_fields);
+		const auto _fieldStr = _fieldStrBuffer.data();
+		return getinfo(_lua, _fieldStr);
+	};
+
+
+	// Pushes the function at a given level onto the stack
+	inline bool getfunction(state_ptr _lua, int _level, debug_info& _inOutInfo)
+	{
+		if (!getstack(_lua, _level, _inOutInfo))
+		{
+			return false;
+		};
+		if (!getinfo(_lua, info_field::function, _inOutInfo))
+		{
+			return false;
+		};
+		assert(type_of(_lua, -1) == type::function);
+		return true;
+	};
+
+	// Pushes the function at a given level onto the stack
+	inline bool getfunction(state_ptr _lua, int _level)
+	{
+		auto _info = debug_info{};
+		const auto _result = getfunction(_lua, _level, _info);
+		return _result;
+	};
+
 
 
 };
+
+
