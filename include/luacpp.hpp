@@ -50,8 +50,6 @@ namespace lua
 		lightuserdata = LUA_TLIGHTUSERDATA,
 	};
 
-
-
 	/**
 	 * @brief Lua state/thread status codes.
 	*/
@@ -133,7 +131,6 @@ namespace lua
 	*/
 	using writer_fn = lua_Writer;
 
-
 	/**
 	 * @brief "nil" tag type, used to represent a nil value
 	*/
@@ -147,8 +144,6 @@ namespace lua
 	*/
 	constexpr inline auto nil = nil_t();
 
-
-
 	/**
 	 * @brief "fail" tag type, used to represent the fail value
 	*/
@@ -161,9 +156,6 @@ namespace lua
 	 * @brief "fail" tag type value, used to represent a fail value
 	*/
 	constexpr inline auto fail = fail_t();
-	
-
-
 
 	/**
 	 * @brief Customization point for defining how a type can interact with the lua state.
@@ -173,9 +165,6 @@ namespace lua
 	*/
 	template <typename T, typename Enable = void>
 	struct stack_traits;
-
-
-
 
 	/**
 	 * @brief Named lua chunk loading modes.
@@ -205,62 +194,11 @@ namespace lua
 
 
 /*
-	Type invariants
-*/
-
-namespace lua
-{
-	
-};
-
-
-
-/*
 	Basic lua functionality
 */
 
 namespace lua
 {
-#if false
-	namespace impl
-	{
-		template <typename TagT>
-		struct basic_index
-		{
-		public:
-			using rep = int;
-			constexpr rep value() const { return this->v_; };
-
-			constexpr explicit operator rep() const noexcept { return this->value(); };
-
-			constexpr bool operator==(const basic_index& rhs) const noexcept
-			{
-				auto& lhs = *this;
-				return lhs.value() == rhs.value();
-			};
-			constexpr bool operator!=(const basic_index& rhs) const noexcept
-			{
-				auto& lhs = *this;
-				return lhs.value() != rhs.value();
-			};
-
-			constexpr basic_index() noexcept = default;
-			constexpr explicit basic_index(rep v) noexcept :
-				v_(v)
-			{};
-		private:
-			rep v_;
-		};
-		using index = impl::basic_index<struct index_tag>;
-		namespace literals
-		{
-			consteval index operator""_idx(unsigned long long n) { return index(index::rep(n)); };
-		};
-		constexpr inline auto ridx_globals = index(LUA_RIDX_GLOBALS);
-	};
-#endif
-
-	
 	inline state* newstate(alloc_fn f, void* ud)
 	{
 		return lua_newstate(f, ud);
@@ -941,6 +879,48 @@ namespace lua
 	};
 
 };
+
+
+
+/*
+	luaL_Buffer functionality 
+*/
+
+#pragma region LUA_BUFFER
+namespace lua
+{
+	/**
+	 * @brief Alias of the luaL_buffer type, allowing piece-wise construction of a string.
+	*/
+	using buffer = luaL_Buffer;
+
+	// luaL_buffinit
+	inline void init(state_ptr _lua, buffer& _buff)
+	{
+		luaL_buffinit(_lua, &_buff);
+	};
+
+	// luaL_buffinitsize
+	inline auto init(state_ptr _lua, buffer& _buff, size_t _len)
+	{
+		return luaL_buffinitsize(_lua, &_buff, _len);
+	};
+
+	// luaL_pushresult
+	inline void push(state_ptr _lua, buffer&& _buff)
+	{
+		luaL_pushresult(&_buff);
+	};
+
+	// luaL_pushresultsize
+	inline void push(state_ptr _lua, buffer&& _buff, size_t _size)
+	{
+		luaL_pushresultsize(&_buff, _size);
+	};
+
+
+};
+#pragma endregion
 
 
 
