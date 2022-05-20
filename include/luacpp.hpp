@@ -907,13 +907,13 @@ namespace lua
 	};
 
 	// luaL_pushresult
-	inline void push(state_ptr _lua, buffer&& _buff)
+	inline void push(buffer&& _buff)
 	{
 		luaL_pushresult(&_buff);
 	};
 
 	// luaL_pushresultsize
-	inline void push(state_ptr _lua, buffer&& _buff, size_t _size)
+	inline void push(buffer&& _buff, size_t _size)
 	{
 		luaL_pushresultsize(&_buff, _size);
 	};
