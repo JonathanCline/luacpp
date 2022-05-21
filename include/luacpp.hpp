@@ -197,6 +197,7 @@ namespace lua
 	Basic lua functionality
 */
 
+#pragma region BASIC
 namespace lua
 {
 	inline state* newstate(alloc_fn f, void* ud)
@@ -238,9 +239,9 @@ namespace lua
 	};
 
 	inline void push(state* l, nil_t v) { lua_pushnil(l); };
-	inline void push(state* l, lua_Integer v) { lua_pushinteger(l, v); };
-	inline void push(state* l, lua_Number v) { lua_pushnumber(l, v); };
-	inline void push(state* l, bool v) { lua_pushboolean(l, v); };
+	//inline void push(state* l, lua_Integer v) { lua_pushinteger(l, v); };
+	//inline void push(state* l, lua_Number v) { lua_pushnumber(l, v); };
+	//inline void push(state* l, bool v) { lua_pushboolean(l, v); };
 	inline void push(state* l, const char* v) { lua_pushstring(l, v); };
 	inline void push(state* l, const char* v, size_t len) { lua_pushlstring(l, v, len); };
 	inline void push(state* l, const std::string& v) { push(l, v.c_str(), v.size()); };
@@ -523,6 +524,20 @@ namespace lua
 	inline void setfield(state* _lua, int _tableIdx, const char* _key) { lua_setfield(_lua, _tableIdx, _key); };
 	inline type getfield(state* _lua, int _tableIdx, const char* _key) { return type(lua_getfield(_lua, _tableIdx, _key)); };
 
+	template <typename T, typename... ExtraArgTs>
+	requires cx_pushable<T, ExtraArgTs...>
+	inline void pushfield(state* _lua, int _tableIdx, const char* _key,  T&& _value, ExtraArgTs&&... _extra)
+	{
+		_tableIdx = abs(_lua, _tableIdx);
+		const auto t0 = top(_lua);
+		lua::push(_lua, std::forward<T>(_value), std::forward<ExtraArgTs>(_extra)...);
+		const auto tDiff = top(_lua) - t0;
+		const auto t = type_of(_lua, -1);
+
+		setfield(_lua, _tableIdx, _key);
+	};
+
+
 	inline void rawset(state* _lua, int _index) { lua_rawset(_lua, _index); };
 	inline void rawset(state* _lua, int _index, lua_Integer _key) { lua_rawseti(_lua, _index, _key); };
 	inline void rawset(state* _lua, int _index, void* _key) { lua_rawsetp(_lua, _index, _key); };
@@ -548,6 +563,29 @@ namespace lua
 	};
 
 	inline lua_Unsigned rawlen(state* _lua, int _index) { return lua_rawlen(_lua, _index); };
+
+	/**
+	 * @brief Appends the value on the top of the stack to a table.
+	 * @param _lua Lua state.
+	 * @param _tableIndex Index of the table to append to.
+	 * @return New length of the table.
+	*/
+	inline lua_Unsigned rawappend(state_ptr _lua, int _tableIndex)
+	{
+		assert(type_of(_lua, _tableIndex) == type::table);
+		
+		// Grab the length
+		const auto _len = rawlen(_lua, _tableIndex);
+		const auto _newlen = _len + 1;
+
+		// Raw set to append
+		rawset(_lua, _tableIndex, _newlen);
+
+		// Return new length
+		return _newlen;
+	};
+
+
 
 	inline void get_or_create_table(state* _lua, int _tableIndex, void* _key)
 	{
@@ -878,7 +916,20 @@ namespace lua
 		};
 	};
 
+
+
+
+	inline int setmetatable(state_ptr _lua, int _objIndex)
+	{
+		return lua_setmetatable(_lua, _objIndex);
+	};
+	inline bool getmetatable(state_ptr _lua, int _objIndex)
+	{
+		return lua_getmetatable(_lua, _objIndex) == 1;
+	};
+
 };
+#pragma endregion
 
 
 
@@ -1067,6 +1118,35 @@ namespace lua
 			return lua_pushstring(_lua, _value.c_str());
 		};
 	};
+
+	template <typename T, typename Alloc>
+	struct stack_traits<std::vector<T, Alloc>>
+	{
+		using type = std::vector<T, Alloc>;
+		static void push(state_ptr _lua, const type& _values)
+			requires cx_pushable<T>
+		{
+			// Make a table to return results in
+			newtable(_lua);
+			const auto _tableIndex = top(_lua);
+
+			// Append results into table
+			for (auto& v : _values)
+			{
+				const auto t0 = top(_lua);
+				lua::push(_lua, v);
+				const auto tDiff = top(_lua) - t0;
+
+				for (int n = 0; n != tDiff; ++n)
+				{
+					rawappend(_lua, _tableIndex);
+				};
+			};
+
+			// Done
+		};
+	};
+
 
 	/**
 	 * @brief Stack traits type for lua C functions.
